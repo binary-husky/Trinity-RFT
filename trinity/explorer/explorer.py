@@ -34,6 +34,7 @@ from trinity.utils.monitor import MONITOR, gather_metrics
 from trinity.utils.plugin_loader import load_plugins
 from trinity.utils.timer import Timer
 
+from astune.backbone_trinity import *
 
 class Explorer:
     """Responsible for exploring the taskset."""

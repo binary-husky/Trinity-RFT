@@ -40,7 +40,7 @@ class Task(dict):
     index: dict = field(default_factory=dict)
 
     def to_workflow(
-        self, model: Any, auxiliary_models: Optional[List[openai.OpenAI]] = None
+        self, config, model: Any, auxiliary_models: Optional[List[openai.OpenAI]] = None
     ) -> Workflow:
         """Convert the task to a workflow.
 
@@ -55,6 +55,7 @@ class Task(dict):
             Workflow: The generated workflow object.
         """
         return self.workflow(
+            config=config,
             model=model,
             task=self,
             auxiliary_models=auxiliary_models,

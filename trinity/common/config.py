@@ -170,7 +170,7 @@ class StorageConfig:
     default_workflow_type: Optional[str] = None
     default_reward_fn_type: Optional[str] = None
     rollout_args: GenerationConfig = field(default_factory=GenerationConfig)
-    workflow_args: dict = field(default_factory=dict)
+    workflow_args: dict = field(default_factory=dict)   # qingxu: TODO
     reward_fn_args: dict = field(default_factory=dict)
     task_selector: TaskSelectorConfig = field(default_factory=TaskSelectorConfig)
 
@@ -736,6 +736,7 @@ class StageConfig:
     data_processor: Optional[DataProcessorConfig] = None
     explorer: Optional[ExplorerConfig] = None
     trainer: Optional[TrainerConfig] = None
+
 
 
 @dataclass

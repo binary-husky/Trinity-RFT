@@ -7,7 +7,7 @@ algorithm:
   optimizer:
     lr: 1e-5
 model:
-  model_path: ${oc.env:TRINITY_MODEL_PATH,Qwen/Qwen2.5-1.5B-Instruct}
+  model_path: '/mnt/data/model_cache/modelscope/hub/Qwen/Qwen/Qwen2___5-1___5B-Instruct'
   max_response_tokens: 1024
   max_model_len: 2048
 cluster:
@@ -50,6 +50,7 @@ explorer:
     engine_num: 2
     tensor_parallel_size: 1
     enable_prefix_caching: false
+    gpu_memory_utilization: 0.7
     enforce_eager: true
     dtype: bfloat16
     seed: 42
