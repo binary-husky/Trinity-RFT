@@ -6,6 +6,7 @@ import datasets
 from datasets import Dataset, load_dataset
 
 from trinity.buffer.buffer_reader import BufferReader
+from trinity.buffer.reader.reader import READER
 from trinity.buffer.schema.formatter import FORMATTER
 from trinity.common.config import StorageConfig
 
@@ -85,14 +86,42 @@ class _HFBatchReader:
 
 
 class BaseFileReader(BufferReader):
-    def __len__(self):
-        return self.dataset.dataset_size
-
     async def read_async(self, batch_size: Optional[int] = None):
         try:
             return self.read(batch_size)
         except StopIteration as e:
             raise StopAsyncIteration from e
+
+
+@READER.register_module("file")
+class FileReader(BaseFileReader):
+    """Provide a unified interface for Experience and Task file readers."""
+
+    def __init__(self, config: StorageConfig):
+        if config.schema_type and config.schema_type != "task":
+            self.reader = ExperienceFileReader(config)
+        else:
+            self.reader = TaskFileReader(config)
+
+    def read(self, batch_size: Optional[int] = None) -> List:
+        return self.reader.read(batch_size)
+
+    def read_with_indices(self, indices: List[int]) -> List:
+        """Read tasks with indices."""
+        return self.reader.read_with_indices(indices)
+
+    async def read_with_indices_async(self, indices: List[int]) -> List:
+        """Read tasks with indices asynchronously."""
+        return await self.reader.read_with_indices_async(indices)
+
+    def state_dict(self):
+        return self.reader.state_dict()
+
+    def load_state_dict(self, state_dict):
+        return self.reader.load_state_dict(state_dict)
+
+    def __len__(self):
+        return self.reader.__len__()
 
 
 class ExperienceFileReader(BaseFileReader):
@@ -120,6 +149,15 @@ class ExperienceFileReader(BaseFileReader):
             experience = self.formatter.format(sample)
             exp_list.append(experience)
         return exp_list
+
+    def state_dict(self):
+        return {"current_index": self.dataset.current_offset}
+
+    def load_state_dict(self, state_dict):
+        self.dataset.current_offset = state_dict["current_index"]
+
+    def __len__(self):
+        return self.dataset.dataset_size
 
 
 class TaskFileReader(BaseFileReader):
@@ -165,60 +203,11 @@ class TaskFileReader(BaseFileReader):
         """Read tasks with indices asynchronously."""
         return self.read_with_indices(indices)
 
+    def state_dict(self):
+        return {"current_index": self.dataset.current_offset}
 
-import os
-def read_astune_config(yaml_fp):
-    from hydra import initialize, compose
-    from omegaconf import DictConfig
+    def load_state_dict(self, state_dict):
+        self.dataset.current_offset = state_dict["current_index"]
 
-    def load_hydra_config(config_path: str, config_name: str) -> DictConfig:
-        with initialize(config_path=config_path, version_base=None):
-            cfg = compose(config_name=config_name, overrides=[])
-            return cfg
-
-    dir_path = os.path.dirname(yaml_fp)
-    file_name = os.path.basename(yaml_fp)
-    return load_hydra_config(config_path=dir_path, config_name=file_name)
-
-class AstuneTaskReader(TaskFileReader):
-    def __init__(self, config):
-        self.config = config
-        self.read_batch_size = config.batch_size
-        self.split = config.split
-
-        yaml_path = os.environ.get('ASTUNE_CONFIG_REDIRECT', None)
-        if yaml_path is None:
-            raise ValueError("ASTUNE_CONFIG_REDIRECT is not set in environment variables")
-        astune_config = read_astune_config(os.path.relpath(yaml_path, os.path.dirname(__file__)))
-
-        # from vsdb import bp
-        # bp("XXX")
-
-        from astune.task_reader import TaskReaderRouter, task_to_standard_dataset
-        task_reader = TaskReaderRouter(astune_config)
-        if 'train' in self.split:
-            train_dataset = task_to_standard_dataset(task_reader.get_training_tasks())
-        if 'val' in self.split:
-            train_dataset = task_to_standard_dataset(task_reader.get_validation_tasks())
-
-        self.dataset = _HFBatchReader(
-            datasets.concatenate_datasets([train_dataset]), # type ignore
-            name=self.config.name,
-            default_batch_size=self.read_batch_size,
-            total_epochs=self.config.total_epochs if not self.config.is_eval else 1,
-            offset=self.config.index,
-            drop_last=not self.config.is_eval,
-            total_steps=self.config.total_steps,
-            enable_progress_bar=self.config.enable_progress_bar,
-        )
-        self.formatter = FORMATTER.get("task")(self.config)
-
-    def read(self, batch_size: Optional[int] = None) -> List:
-        batch_size = batch_size or self.read_batch_size
-        tasks = []
-        samples = self.dataset.read_batch(batch_size)
-        for sample in samples:
-            task = self.formatter.format(sample)
-            tasks.append(task)
-        return tasks
-
+    def __len__(self):
+        return self.dataset.dataset_size

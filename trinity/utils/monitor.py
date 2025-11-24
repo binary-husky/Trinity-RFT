@@ -329,7 +329,6 @@ class SwanlabMonitor(Monitor):
         with open(f"{self.exp_name}.log", "a") as f:
             f.write(f"Step {step}: {data}\n")
 
-
     def close(self) -> None:
         try:
             # Prefer run.finish() if available

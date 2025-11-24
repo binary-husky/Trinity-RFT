@@ -98,6 +98,11 @@ class OptimizerConfig:
     optimizer_type: str = "adam"
     betas: List[float] = field(default_factory=lambda: [0.9, 0.999])
     weight_decay: float = 0.01
+    clip_grad: float = 1.0
+    lr_warmup_init: float = 0.0
+    lr_decay_steps: Optional[int] = None
+    lr_decay_style: str = "constant"
+    min_lr: float = 0.0
 
 
 @dataclass
@@ -139,13 +144,31 @@ class ReplayBufferConfig:
 
 
 @dataclass
+class OverRolloutConfig:
+    """Config for over-rollout in explorer."""
+
+    ratio: float = 0.0  # explorer will only wait for (1 - over_rollout.ratio) * batch_size of tasks at each step
+    wait_after_min: float = 30.0  # wait 30 s after reaching minimum task threshold
+    # more settings will be added in the future
+    # e.g., postpone tasks into the next step if not finished in time
+
+
+@dataclass
+class DynamicTimeoutConfig:
+    """Config for dynamic timeout in explorer."""
+
+    enable: bool = False
+    ratio: float = 3.0  # the timeout for each step will be min(max_timeout, average_time_per_task * dynamic_timeout.ratio)
+
+
+@dataclass
 class StorageConfig:
     """Storage config for both taskset and experience buffer.
     Not visible to users directly. Please use ExperienceBufferConfig or TasksetConfig instead.
     """
 
     name: str = ""
-    storage_type: StorageType = StorageType.FILE
+    storage_type: str = StorageType.FILE.value
     path: Optional[str] = None
     repeat_times: Optional[int] = None
 
@@ -205,7 +228,7 @@ class StorageConfig:
 @dataclass
 class TasksetConfig:
     name: str = ""
-    storage_type: StorageType = StorageType.FILE
+    storage_type: str = StorageType.FILE.value
     path: Optional[str] = None
 
     default_workflow_type: Optional[str] = None
@@ -271,7 +294,7 @@ class ExperienceBufferConfig:
     """Storage Config for trainer input experience buffer."""
 
     name: str = ""
-    storage_type: StorageType = StorageType.FILE
+    storage_type: str = StorageType.QUEUE.value
     path: Optional[str] = None
 
     # used for StorageType.QUEUE
@@ -412,6 +435,9 @@ class ModelConfig:
     critic_model_path: str = ""
 
     custom_chat_template: Optional[str] = None
+    chat_template_path: Optional[
+        str
+    ] = None  # path to the chat template file, e.g., jinja2 type; overrides `custom_chat_template` if set
 
     # rollout args
     temperature: float = 1.0
@@ -436,6 +462,10 @@ class ModelConfig:
     lora_configs: Optional[List[LoRAConfig]] = None
     fully_sharded_loras: bool = False
     max_cpu_loras: Optional[int] = None
+
+    # rope config
+    rope_scaling: Optional[dict] = None
+    rope_theta: Optional[float] = None
 
 
 @dataclass
@@ -498,6 +528,10 @@ class InferenceModelConfig:
     lora_modules: Optional[List[Dict]] = None
     lora_kwargs: Optional[dict] = field(default_factory=dict)
 
+    # ! DO NOT SET, rope config
+    rope_scaling: Optional[dict] = None
+    rope_theta: Optional[float] = None
+
 
 @dataclass
 class AlgorithmConfig:
@@ -532,6 +566,10 @@ class AlgorithmConfig:
     entropy_loss_fn: Optional[str] = None  # "default"
     # If not set, use entropy_loss_fn.default_args()
     entropy_loss_fn_args: Optional[dict] = None
+
+    # aggregation mode for losses: 'token-mean' or 'seq-mean-token-sum' or 'seq-mean-token-mean' or 'seq-mean-token-sum-norm'
+    # If not set, use 'token-mean'
+    loss_agg_mode: Optional[str] = None
 
 
 @dataclass
@@ -599,7 +637,7 @@ class ExplorerConfig:
     # for workflow runner
     # number of workflow runners.
     runner_per_model: int = 8  # number of runners per each rollout model
-    max_timeout: int = 1800  # wait each task for 30 minutes
+    max_timeout: int = 1800  # wait each task for 30 minutes at most
     max_retry_times: int = 2  # retry each task for 2 times if it fails or timeout
     env_vars: dict = field(default_factory=dict)  # environment variables for workflow runner
     max_repeat_times_per_runner: Optional[
@@ -629,6 +667,11 @@ class ExplorerConfig:
     service_status_check_interval: int = 60
     # keep at least 1 model in running status
     min_running_model_num: int = 1
+    # Experimental feature
+    over_rollout: OverRolloutConfig = field(default_factory=OverRolloutConfig)
+    dynamic_timeout: DynamicTimeoutConfig = field(default_factory=DynamicTimeoutConfig)
+    # report runner state every `runner_state_report_interval` seconds, 0 to disable
+    runner_state_report_interval: int = 0
 
 
 @dataclass
@@ -834,8 +877,8 @@ class Config:
                 )
 
     def _check_explorer_input(self) -> None:
-        if self.mode == "train":
-            # no need to check explorer_input in train mode
+        if self.mode in {"train", "serve"}:
+            # no need to check explorer_input in serve mode
             return
 
         explorer_input = self.buffer.explorer_input
@@ -845,12 +888,11 @@ class Config:
                 raise ValueError("Do not support setting `taskset` and `tasksets` simultaneously!")
             explorer_input.tasksets = [explorer_input.taskset]
             explorer_input.taskset = None
-        elif len(explorer_input.tasksets) == 0:
+        elif self.mode != "bench" and len(explorer_input.tasksets) == 0:
             raise ValueError("At least one taskset should be provided in explorer_input!")
-        tasksets = explorer_input.tasksets
 
-        for i, taskset in enumerate(tasksets):
-            if self.mode != "train" and not taskset.path:
+        for i, taskset in enumerate(explorer_input.tasksets):
+            if not taskset.path:
                 raise ValueError(
                     "`buffer.explorer_input.taskset.path` is required, please set it to the path of the taskset."
                 )
@@ -873,6 +915,7 @@ class Config:
             set_if_none(taskset.rollout_args, "top_k", self.model.top_k)
             set_if_none(taskset.rollout_args, "logprobs", self.model.logprobs)
             set_if_none(taskset.rollout_args, "max_tokens", self.model.max_response_tokens)
+            set_if_none(taskset.format, "chat_template", self.model.custom_chat_template)
 
         for idx, dataset in enumerate(explorer_input.eval_tasksets):
             if not dataset.path:
@@ -894,20 +937,24 @@ class Config:
             set_if_none(dataset.rollout_args, "max_tokens", self.model.max_response_tokens)
 
     def _check_trainer_input(self) -> None:
+        if self.mode == "bench":
+            # no need to check trainer_input in bench mode
+            return
+
         trainer_input = self.buffer.trainer_input
         experience_buffer = trainer_input.experience_buffer
 
         if experience_buffer is None:
             experience_buffer = trainer_input.experience_buffer = ExperienceBufferConfig(
                 name="experience_buffer",
-                storage_type=StorageType.QUEUE,
+                storage_type=StorageType.QUEUE.value,
             )
             logger.info(f"Auto set `buffer.trainer_input.experience_buffer` to {experience_buffer}")
-        elif experience_buffer.storage_type is StorageType.FILE and self.mode == "both":
+        elif experience_buffer.storage_type == StorageType.FILE.value and self.mode == "both":
             logger.warning(
                 "`FILE` storage is not supported to use as experience_buffer in `both` mode, use `QUEUE` instead."
             )
-            experience_buffer.storage_type = StorageType.QUEUE
+            experience_buffer.storage_type = StorageType.QUEUE.value
 
         if not experience_buffer.name:
             experience_buffer.name = "experience_buffer"
@@ -944,8 +991,8 @@ class Config:
             experience_buffer.total_epochs = self.buffer.total_epochs
             experience_buffer.total_steps = self.buffer.total_steps
 
-    def _default_storage_path(self, storage_type: StorageType, name: str) -> str:
-        if storage_type == StorageType.SQL:
+    def _default_storage_path(self, storage_type: str, name: str) -> str:
+        if storage_type == StorageType.SQL.value:
             return "sqlite:///" + os.path.join(self.buffer.cache_dir, f"{name}.db")  # type: ignore[arg-type]
         else:
             return os.path.join(self.buffer.cache_dir, f"{name}.jsonl")  # type: ignore[arg-type]
@@ -953,7 +1000,7 @@ class Config:
     def _check_data_processor(self) -> None:
         # check input/output buffers in pipelines
         experience_pipeline = self.data_processor.experience_pipeline
-        if experience_pipeline is not None:
+        if experience_pipeline is not None and self.mode in {"explore", "both", "serve"}:
             if experience_pipeline.save_input and experience_pipeline.input_save_path is None:
                 experience_pipeline.input_save_path = os.path.join(
                     self.buffer.cache_dir, "explorer_output.jsonl"  # type: ignore[arg-type]
@@ -963,10 +1010,15 @@ class Config:
                 )
 
         task_pipeline = self.data_processor.task_pipeline
-        if task_pipeline is not None:
+        if task_pipeline is not None and self.mode in {"explore", "train", "both"}:
             if task_pipeline.output is None:
                 if self.mode != "train":
-                    task_pipeline.output = self.buffer.explorer_input.tasksets[0]
+                    if len(self.buffer.explorer_input.tasksets) > 0:
+                        task_pipeline.output = self.buffer.explorer_input.tasksets[0]
+                    else:
+                        raise ValueError(
+                            "At least one taskset should be provided in explorer_input!"
+                        )
                 elif self.mode == "train" and self.algorithm.algorithm_type in {"dpo", "sft"}:
                     task_pipeline.output = self.buffer.trainer_input.experience_buffer
                 else:
@@ -1043,6 +1095,7 @@ class Config:
             "kl_penalty_fn": "none",
             "kl_loss_fn": "k2",
             "entropy_loss_fn": "default",
+            "loss_agg_mode": "token-mean",
         }
         default_config.update(algorithm.default_config())
         for key, value in default_config.items():
@@ -1061,11 +1114,19 @@ class Config:
         check_and_set("kl_loss_fn", KL_FN, "kl_loss_fn_args")
         check_and_set("kl_penalty_fn", KL_FN, "kl_penalty_fn_args")
         check_and_set("entropy_loss_fn", ENTROPY_LOSS_FN, "entropy_loss_fn_args")
+        if "loss_agg_mode" in self.algorithm.policy_loss_fn_args:  # type: ignore [operator]
+            # override loss_agg_mode in policy_loss_fn_args
+            self.algorithm.policy_loss_fn_args["loss_agg_mode"] = self.algorithm.loss_agg_mode  # type: ignore [index]
 
     def _check_model(self) -> None:
         model = self.model
         if not model.critic_model_path:
             model.critic_model_path = model.model_path
+
+        # check template
+        if model.chat_template_path and model.custom_chat_template is None:
+            with open(model.chat_template_path, "r") as f:
+                model.custom_chat_template = f.read()
 
         # check max_model_len, max_prompt_tokens, max_response_tokens
 
@@ -1191,13 +1252,29 @@ class Config:
                 "max_response_tokens",
                 "min_response_tokens",
             ]
-            for args in ["model_path"] + rollout_args + length_args:
+            rope_args = ["rope_scaling", "rope_theta"]
+            model_args = rollout_args + length_args + rope_args
+            for args in ["model_path"] + model_args:
                 setattr(self.explorer.rollout_model, args, getattr(self.model, args))
+            if (
+                self.explorer.rollout_model.chat_template is None
+                and self.model.custom_chat_template is not None
+            ):
+                self.explorer.rollout_model.chat_template = self.model.custom_chat_template
             for aux_model in self.explorer.auxiliary_models:
                 if not aux_model.model_path:
                     raise ValueError("auxiliary model's model_path is required.")
-                for args in rollout_args + length_args:
+                for args in model_args:
                     set_if_none(aux_model, args, getattr(self.model, args))
+
+            if self.explorer.over_rollout.ratio > 0.0:
+                if not (0.0 <= self.explorer.over_rollout.ratio < 1.0):
+                    raise ValueError("over_rollout_ratio should be in [0.0, 1.0)")
+                if self.synchronizer.sync_style == SyncStyle.FIXED:
+                    raise ValueError(
+                        "over_rollout_ratio is not compatible with fixed sync_style, please set "
+                        "`synchronizer.sync_style` to `dynamic_by_explorer` or `dynamic_by_trainer`."
+                    )
 
             # for lora configs
             if self.model.lora_configs is not None:

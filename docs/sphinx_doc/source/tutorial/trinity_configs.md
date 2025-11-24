@@ -157,6 +157,8 @@ Defines the model paths and token limits.
 model:
   model_path: ${oc.env:MODEL_PATH}  # MODEL_PATH is an environment variable set in advance
   critic_model_path: ${model.model_path}  # use the value of model.model_path
+  custom_chat_template: None
+  chat_template_path: None
   max_model_len: 20480
   max_prompt_tokens: 4096
   max_response_tokens: 16384
@@ -165,6 +167,8 @@ model:
 
 - `model_path`: Path to the model being trained.
 - `critic_model_path`: Optional path to a separate critic model. If empty, defaults to `model_path`.
+- `custom_chat_template`: Optional custom chat template in string format. If not specified, the system will use the default chat template from tokenizer.
+- `chat_template_path`: Optional path to the chat template file in jinja2 type; overrides `custom_chat_template` if set. If not specified, the system will use the default chat template from tokenizer.
 - `max_model_len`: Maximum number of tokens in a sequence. It is recommended to set this value manually. If not specified, the system will attempt to set it to `max_prompt_tokens` + `max_response_tokens`. However, this requires both values to be already set; otherwise, an error will be raised.
 - `max_response_tokens`: Maximum number of tokens allowed in generated responses. Only for `chat` and `generate` methods in `InferenceModel`.
 - `max_prompt_tokens`: Maximum number of tokens allowed in prompts. Only for `chat` and `generate` methods in `InferenceModel`.
@@ -367,6 +371,13 @@ explorer:
     tensor_parallel_size: 1
   eval_interval: 100
   eval_on_startup: True
+  over_rollout:
+    ratio: 0.0
+    wait_after_min: 30.0
+  dynamic_timeout:
+    enable: false
+    ratio: 3.0
+  runner_state_report_interval: 0
 ```
 
 - `name`: Name of the explorer. This name will be used as the Ray actor's name, so it must be unique.
@@ -381,6 +392,13 @@ explorer:
 - `auxiliary_models`: Additional models used for custom workflows.
 - `eval_interval`: Interval (in steps) for evaluating the model.
 - `eval_on_startup`: Whether to evaluate the model on startup. More precisely, at step 0 with the original model, so it will not be triggered when restarting.
+- `over_rollout`: [Experimental] Configurations for over-rollout mechanism, which allows the explorer to proceed with fewer tasks than the full batch size. It effectively increases throughput in scenarios where some tasks take significantly longer to complete than others. Only applicable when dynamic synchronization (`synchronizer.sync_style` is not `fixed`) is used.
+  - `ratio`: Explorer will only wait for `(1 - ratio) * batch_size` of tasks at each step. Default is `0.0`, meaning waiting for all tasks.
+  - `wait_after_min`: After reaching the minimum task threshold, wait for this many seconds before proceeding. Default is `30.0` seconds.
+- `dynamic_timeout`: [Experimental] Configurations for dynamic timeout mechanism, which adjusts the timeout for each task based on the average time taken for successful tasks.
+  - `enable`: Whether to enable dynamic timeout. Default is `false`.
+  - `ratio`: The timeout for each task is dynamically set to `average_time_per_success_task * ratio`. Default is `3.0`.
+- `runner_state_report_interval`: Workflow runner report interval (in seconds). If set to a value greater than `0`, the workflow runner will periodically report its status to the main explorer process and print it in the command line for monitoring. Default is `0`, meaning this feature is disabled. If you want to use this feature, it is recommended to set it to `10` seconds or longer to minimize performance impact.
 
 ---
 
@@ -394,6 +412,7 @@ synchronizer:
   sync_interval: 10
   sync_offset: 0
   sync_timeout: 1200
+  sync_style: 'fixed'
 ```
 
 - `sync_method`: Method of synchronization. Options:
@@ -402,6 +421,9 @@ synchronizer:
 - `sync_interval`: Interval (in steps) of model weight synchronization between trainer and explorer.
 - `sync_offset`: Offset (in steps) of model weight synchronization between trainer and explorer. The explorer can run `sync_offset` steps before the trainer starts training.
 - `sync_timeout`: Timeout duration for synchronization.
+- `sync_style`: Style of synchronization. Options:
+  - `fixed`: The explorer and trainer synchronize weights every `sync_interval` steps.
+  - `dynamic_by_explorer`: The explorer notifies the trainer to synchronize weights after completing `sync_interval` steps, regardless of how many steps the trainer has completed at this point.
 
 ---
 
