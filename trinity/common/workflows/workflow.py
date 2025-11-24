@@ -53,7 +53,6 @@ class Task(dict):
             Workflow: The generated workflow object.
         """
         return self.workflow(
-            config=config,
             model=model,
             task=self,
             auxiliary_models=auxiliary_models,

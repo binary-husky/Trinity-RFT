@@ -60,7 +60,7 @@ class StorageType(CaseInsensitiveEnum):
     SQL = "sql"
     QUEUE = "queue"
     FILE = "file"
-    ASTUNE = "astune"
+    ASTUNE = "astune_workflow"
 
 
 class SyncMethodEnumMeta(CaseInsensitiveEnumMeta):
