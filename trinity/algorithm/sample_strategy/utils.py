@@ -5,6 +5,7 @@ from trinity.common.experience import Experience
 
 
 def representative_sample(experiences: List[Experience]) -> List[dict]:
+    from vsdb import bp; bp("AAA")
     if experiences[0].reward is None:
         sample = random.choice(experiences)
         return [

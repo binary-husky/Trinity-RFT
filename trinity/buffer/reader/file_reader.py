@@ -182,10 +182,10 @@ class AstuneTaskReader(BaseFileReader):
             raise ValueError("ASTUNE_CONFIG_REDIRECT is not set in environment variables")
         astune_config = read_astune_config(os.path.relpath(yaml_path, os.path.dirname(__file__)))
 
-        # from vsdb import bp
-        # bp("XXX")
-
-        from astune.task_reader.task_reader_base import TaskReaderRouter, task_to_standard_dataset
+        from astune.task_reader import (
+            TaskReaderRouter,
+            task_to_standard_dataset,
+        )
         task_reader = TaskReaderRouter(astune_config)
         if 'train' in self.split:
             train_dataset = task_to_standard_dataset(task_reader.get_training_tasks())

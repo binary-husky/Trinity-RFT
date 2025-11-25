@@ -12,6 +12,7 @@ from trinity.common.rewards import REWARD_FUNCTIONS
 from trinity.common.workflows import WORKFLOWS, Task
 from trinity.utils.log import get_logger
 from trinity.utils.registry import Registry
+from astune.backbone.trinity_compat_workflow import *
 
 FORMATTER = Registry("formatter")
 
@@ -43,6 +44,9 @@ class TaskFormatter:
         self.default_reward_fn_cls = REWARD_FUNCTIONS.get(config.default_reward_fn_type)  # type: ignore
         self.workflow_key = config.format.workflow_key
         self.reward_fn_key = config.format.reward_fn_key
+        # from  vsdb import bp;  bp("WSD")
+        # if self.default_workflow_cls is None:
+        #     from  vsdb import bp;  bp("WSD")
 
     def format(self, sample: Dict) -> Task:
         """Format a raw sample dict into a Task."""
@@ -56,6 +60,8 @@ class TaskFormatter:
         reward_fn_cls = (
             REWARD_FUNCTIONS.get(reward_fn_name) if reward_fn_name else None
         ) or self.default_reward_fn_cls
+        # if workflow_cls is None:
+        #     from  vsdb import bp;  bp("WSD")
         assert workflow_cls is not None, "`default_workflow_type` or `workflow_key` is required"
         return Task(
             workflow=workflow_cls,
