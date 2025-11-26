@@ -52,7 +52,7 @@ class RunnerWrapper:
         return (
             ray.remote(WorkflowRunner)
             .options(
-                num_cpus=1,
+                num_cpus=0.01,
                 namespace=self.namespace,
                 scheduling_strategy="SPREAD",
                 runtime_env={
